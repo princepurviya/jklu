@@ -112,8 +112,15 @@ detector: DamageDetector = st.session_state.detector
 with st.sidebar:
     st.header("⚙️ Controls")
 
-    st.subheader("📷 Camera")
-    cam_index = st.number_input("Camera index", 0, 10, 0, key="cam_idx")
+    st.subheader("📷 Camera Source")
+    camera_source = st.radio("Select Camera Source", ["Laptop Webcam", "IP Webcam"])
+    
+    if camera_source == "Laptop Webcam":
+        cam_index = st.number_input("Camera index", 0, 10, 0, key="cam_idx")
+        video_source = int(cam_index)
+    else:
+        ip_url = st.text_input("IP Webcam URL", value="http://192.168.1.5:8080/video", key="ip_url")
+        video_source = ip_url
 
     st.subheader("🎯 Detection Settings")
     confidence = st.slider("YOLO confidence", 0.1, 1.0, 0.40, 0.05)
@@ -177,95 +184,101 @@ with tab_camera:
 
     if start_btn:
         st.session_state.camera_running = True
-        cap = cv2.VideoCapture(int(cam_index))
-
-        if not cap.isOpened():
-            st.error("❌ Cannot open camera. Check camera index.")
+        
+        if camera_source == "IP Webcam" and not video_source:
+             st.error("❌ Please enter a valid IP Webcam URL.")
+             st.session_state.camera_running = False
         else:
-            status_placeholder.info("🟢 Camera is running — press **Stop Camera** to end.")
-            while st.session_state.camera_running:
-                ret, frame = cap.read()
-                if not ret:
-                    st.warning("⚠️ Failed to read frame.")
-                    break
-
-                # — YOLO detection
-                annotated, detections = detector.detect_objects(frame)
-
-                # — Crack detection
-                annotated, crack_found, crack_count = detector.detect_cracks(annotated, sensitivity=crack_sensitivity)
-
-                # — Baseline comparison
-                ssim_score = None
-                if st.session_state.baseline is not None:
-                    result = compare_images(st.session_state.baseline, frame, ssim_threshold)
-                    ssim_score = result["ssim_score"]
-
-                # — Alerts
-                if detections:
-                    labels = ", ".join(d["label"] for d in detections)
-                    alert = trigger_alert(f"Unwanted objects detected: {labels}", detections)
-                    st.session_state.alerts.insert(0, alert)
-
-                if crack_found:
-                    alert = trigger_alert(f"Possible structural cracks detected ({crack_count} regions)")
-                    st.session_state.alerts.insert(0, alert)
-
-                if ssim_score is not None and ssim_score < ssim_threshold:
-                    alert = trigger_alert(
-                        f"Scene changed — SSIM {ssim_score:.2%} (threshold {ssim_threshold:.0%})",
-                        severity="MEDIUM",
-                    )
-                    st.session_state.alerts.insert(0, alert)
-
-                # keep only last 50 alerts
-                st.session_state.alerts = st.session_state.alerts[:50]
-
-                # — Render frame
-                frame_placeholder.image(
-                    cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
-                    channels="RGB", use_container_width=True,
-                )
-
-                # — Render metrics
-                metric_obj.markdown(
-                    f'<div class="metric-card"><h3>Objects</h3>'
-                    f'<div class="value">{len(detections)}</div></div>',
-                    unsafe_allow_html=True,
-                )
-                metric_crack.markdown(
-                    f'<div class="metric-card"><h3>Cracks</h3>'
-                    f'<div class="value">{crack_count if crack_found else 0}</div></div>',
-                    unsafe_allow_html=True,
-                )
-                ssim_display = f"{ssim_score:.2%}" if ssim_score is not None else "N/A"
-                metric_ssim.markdown(
-                    f'<div class="metric-card"><h3>SSIM</h3>'
-                    f'<div class="value">{ssim_display}</div></div>',
-                    unsafe_allow_html=True,
-                )
-
-                # — Render alerts
-                alert_html = ""
-                for a in st.session_state.alerts[:10]:
-                    alert_html += (
-                        f'<div class="alert-box">'
-                        f'<span class="ts">{a["timestamp"]}</span><br>{a["message"]}'
-                        f'</div>'
-                    )
-                if not st.session_state.alerts:
-                    alert_html = '<div class="safe-box">✅ No damage detected</div>'
-                alert_placeholder.markdown(alert_html, unsafe_allow_html=True)
-
-                # — Capture baseline on button press
-                if capture_bl:
-                    st.session_state.baseline = frame.copy()
-                    save_baseline(frame)
-
-                time.sleep(0.1)  # ~10 FPS
-
-            cap.release()
-            status_placeholder.info("⏹️ Camera stopped.")
+             cap = cv2.VideoCapture(video_source)
+    
+             if not cap.isOpened():
+                 st.error(f"❌ Cannot open camera at source: {video_source}")
+                 st.session_state.camera_running = False
+             else:
+                 status_placeholder.info(f"🟢 Camera ({camera_source}) is running — press **Stop Camera** to end.")
+                 while st.session_state.camera_running:
+                     ret, frame = cap.read()
+                     if not ret:
+                         st.warning("⚠️ Failed to read frame.")
+                         break
+     
+                     # — YOLO detection
+                     annotated, detections = detector.detect_objects(frame)
+     
+                     # — Crack detection
+                     annotated, crack_found, crack_count = detector.detect_cracks(annotated, sensitivity=crack_sensitivity)
+     
+                     # — Baseline comparison
+                     ssim_score = None
+                     if st.session_state.baseline is not None:
+                         result = compare_images(st.session_state.baseline, frame, ssim_threshold)
+                         ssim_score = result["ssim_score"]
+     
+                     # — Alerts
+                     if detections:
+                         labels = ", ".join(d["label"] for d in detections)
+                         alert = trigger_alert(f"Unwanted objects detected: {labels}", detections)
+                         st.session_state.alerts.insert(0, alert)
+     
+                     if crack_found:
+                         alert = trigger_alert(f"Possible structural cracks detected ({crack_count} regions)")
+                         st.session_state.alerts.insert(0, alert)
+     
+                     if ssim_score is not None and ssim_score < ssim_threshold:
+                         alert = trigger_alert(
+                             f"Scene changed — SSIM {ssim_score:.2%} (threshold {ssim_threshold:.0%})",
+                             severity="MEDIUM",
+                         )
+                         st.session_state.alerts.insert(0, alert)
+     
+                     # keep only last 50 alerts
+                     st.session_state.alerts = st.session_state.alerts[:50]
+     
+                     # — Render frame
+                     frame_placeholder.image(
+                         cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
+                         channels="RGB", use_container_width=True,
+                     )
+     
+                     # — Render metrics
+                     metric_obj.markdown(
+                         f'<div class="metric-card"><h3>Objects</h3>'
+                         f'<div class="value">{len(detections)}</div></div>',
+                         unsafe_allow_html=True,
+                     )
+                     metric_crack.markdown(
+                         f'<div class="metric-card"><h3>Cracks</h3>'
+                         f'<div class="value">{crack_count if crack_found else 0}</div></div>',
+                         unsafe_allow_html=True,
+                     )
+                     ssim_display = f"{ssim_score:.2%}" if ssim_score is not None else "N/A"
+                     metric_ssim.markdown(
+                         f'<div class="metric-card"><h3>SSIM</h3>'
+                         f'<div class="value">{ssim_display}</div></div>',
+                         unsafe_allow_html=True,
+                     )
+     
+                     # — Render alerts
+                     alert_html = ""
+                     for a in st.session_state.alerts[:10]:
+                         alert_html += (
+                             f'<div class="alert-box">'
+                             f'<span class="ts">{a["timestamp"]}</span><br>{a["message"]}'
+                             f'</div>'
+                         )
+                     if not st.session_state.alerts:
+                         alert_html = '<div class="safe-box">✅ No damage detected</div>'
+                     alert_placeholder.markdown(alert_html, unsafe_allow_html=True)
+     
+                     # — Capture baseline on button press
+                     if capture_bl:
+                         st.session_state.baseline = frame.copy()
+                         save_baseline(frame)
+     
+                     time.sleep(0.1)  # ~10 FPS
+     
+                 cap.release()
+                 status_placeholder.info("⏹️ Camera stopped.")
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 2 — Upload Image for detection
