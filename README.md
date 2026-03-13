@@ -74,3 +74,4 @@ A premium-looking dark-themed UI that provides:
 - **Computer Vision:** OpenCV, Scikit-Image (SSIM)
 - **Deep Learning:** Ultralytics YOLOv8 (v8n)
 - **Languages:** Python 3.x
+_

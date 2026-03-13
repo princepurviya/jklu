@@ -9,10 +9,46 @@ import time
 import numpy as np
 import streamlit as st
 from PIL import Image
+from datetime import datetime
 
 from detector import DamageDetector
 from comparator import compare_images, detect_misplaced_objects
 from utils import trigger_alert, save_baseline, load_baseline, clear_baseline
+
+
+def resize_to_width(image: np.ndarray, target_width: int) -> np.ndarray:
+    """Resize image preserving aspect ratio; skip if already smaller."""
+    h, w = image.shape[:2]
+    if w <= target_width:
+        return image
+    scale = target_width / float(w)
+    new_h = max(1, int(h * scale))
+    return cv2.resize(image, (target_width, new_h), interpolation=cv2.INTER_AREA)
+
+
+def push_alert_once(message: str, severity: str = "HIGH", detections: list | None = None):
+    """Avoid alert flooding by suppressing immediate duplicates."""
+    if st.session_state.alerts and st.session_state.alerts[0]["message"] == message:
+        return
+    st.session_state.alerts.insert(0, trigger_alert(message, detections=detections, severity=severity))
+
+
+def grab_fresh_frame(video_source, camera_source: str, warmup_reads: int = 3):
+    """Open camera source and return the freshest available frame."""
+    cap = cv2.VideoCapture(video_source)
+    if camera_source == "IP Webcam":
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    if not cap.isOpened():
+        return None
+
+    grabbed = None
+    for _ in range(max(1, warmup_reads)):
+        ok, frame = cap.read()
+        if ok:
+            grabbed = frame
+    cap.release()
+    return grabbed
 
 # ── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -111,6 +147,14 @@ if "alerts" not in st.session_state:
     st.session_state.alerts = []
 if "camera_running" not in st.session_state:
     st.session_state.camera_running = False
+if "frame_counter" not in st.session_state:
+    st.session_state.frame_counter = 0
+if "capture_baseline_requested" not in st.session_state:
+    st.session_state.capture_baseline_requested = False
+if "last_frame" not in st.session_state:
+    st.session_state.last_frame = None
+if "baseline_captured_at" not in st.session_state:
+    st.session_state.baseline_captured_at = None
 
 detector: DamageDetector = st.session_state.detector
 
@@ -141,6 +185,13 @@ with st.sidebar:
 
     ssim_threshold = st.slider("SSIM alert threshold", 0.50, 1.0, 0.85, 0.05)
 
+    st.subheader("⚡ Performance")
+    processing_width = st.slider("Processing width (px)", 320, 1280, 640, 80)
+    yolo_every_n = st.slider("Run YOLO every N frames", 1, 6, 2)
+    crack_every_n = st.slider("Run crack detection every N frames", 1, 6, 2)
+    ssim_every_n = st.slider("Run SSIM every N frames", 1, 6, 3)
+    target_fps = st.slider("Target display FPS", 5, 30, 12)
+
     st.subheader("🖼️ Baseline Image")
     uploaded = st.file_uploader("Upload baseline image", type=["png", "jpg", "jpeg"])
     if uploaded:
@@ -148,19 +199,34 @@ with st.sidebar:
         img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
         st.session_state.baseline = img
         save_baseline(img)
+        st.session_state.baseline_captured_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         st.success("✅ Baseline uploaded!")
+
+    if st.button("📸 Capture Baseline from Camera", key="capture_sidebar"):
+        captured = grab_fresh_frame(video_source, camera_source)
+        if captured is None:
+            st.error(f"❌ Could not capture baseline from source: {video_source}")
+        else:
+            st.session_state.baseline = captured.copy()
+            st.session_state.last_frame = captured.copy()
+            save_baseline(captured)
+            st.session_state.baseline_captured_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            st.success("✅ Baseline captured successfully from camera.")
 
     if st.session_state.baseline is not None:
         st.image(
             cv2.cvtColor(st.session_state.baseline, cv2.COLOR_BGR2RGB),
             caption="Current Baseline", use_container_width=True,
         )
+        if st.session_state.baseline_captured_at:
+            st.caption(f"Captured at: {st.session_state.baseline_captured_at}")
 
     if st.button("🗑️ Clear Alerts"):
         st.session_state.alerts = []
 
     if st.button("❌ Remove Baseline"):
         st.session_state.baseline = None
+        st.session_state.baseline_captured_at = None
         clear_baseline()
         st.success("🗑️ Baseline removed!")
         st.rerun()
@@ -190,9 +256,20 @@ with tab_camera:
         metric_obj = st.empty()
         metric_crack = st.empty()
         metric_ssim = st.empty()
+        metric_fps = st.empty()
 
     if stop_btn:
         st.session_state.camera_running = False
+
+    if capture_bl:
+        st.session_state.capture_baseline_requested = True
+
+    if st.session_state.capture_baseline_requested and st.session_state.last_frame is not None and not st.session_state.camera_running:
+        st.session_state.baseline = st.session_state.last_frame.copy()
+        save_baseline(st.session_state.baseline)
+        st.session_state.baseline_captured_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        st.session_state.capture_baseline_requested = False
+        st.success("✅ Baseline captured from latest frame.")
 
     if start_btn:
         st.session_state.camera_running = True
@@ -202,58 +279,80 @@ with tab_camera:
              st.session_state.camera_running = False
         else:
              cap = cv2.VideoCapture(video_source)
+             if camera_source == "IP Webcam":
+                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     
              if not cap.isOpened():
                  st.error(f"❌ Cannot open camera at source: {video_source}")
                  st.session_state.camera_running = False
              else:
                  status_placeholder.info(f"🟢 Camera ({camera_source}) is running — press **Stop Camera** to end.")
+                 last_detections = []
+                 last_crack_found = False
+                 last_crack_count = 0
+                 last_ssim_score = None
+                 last_misplaced_count = 0
+
                  while st.session_state.camera_running:
+                     frame_start = time.perf_counter()
+                     st.session_state.frame_counter += 1
+                     frame_id = st.session_state.frame_counter
+
                      ret, frame = cap.read()
                      if not ret:
                          st.warning("⚠️ Failed to read frame.")
                          break
-     
-                     # — YOLO detection
-                     annotated, detections = detector.detect_objects(frame)
-     
-                     # — Crack detection
-                     annotated, crack_found, crack_count = detector.detect_cracks(annotated, sensitivity=crack_sensitivity)
-     
-                     # — Baseline comparison
-                     ssim_score = None
-                     misplaced_count = 0
-                     if st.session_state.baseline is not None:
-                         result = compare_images(st.session_state.baseline, frame, ssim_threshold)
-                         ssim_score = result["ssim_score"]
-                         
-                         # — Contour-based Misplaced Object Detection (>5000px)
+
+                     st.session_state.last_frame = frame.copy()
+
+                     frame_proc = resize_to_width(frame, processing_width)
+                     annotated = frame_proc.copy()
+
+                     # — YOLO detection (throttled)
+                     if frame_id % yolo_every_n == 0:
+                         annotated, last_detections = detector.detect_objects(frame_proc)
+                     detections = last_detections
+
+                     # — Crack detection (throttled)
+                     if frame_id % crack_every_n == 0:
+                         annotated, last_crack_found, last_crack_count = detector.detect_cracks(
+                             annotated,
+                             sensitivity=crack_sensitivity,
+                         )
+                     crack_found = last_crack_found
+                     crack_count = last_crack_count
+
+                     # — Baseline comparison + misplaced detection (throttled)
+                     if st.session_state.baseline is not None and frame_id % ssim_every_n == 0:
+                         baseline_proc = resize_to_width(st.session_state.baseline, processing_width)
+                         result = compare_images(baseline_proc, frame_proc, ssim_threshold)
+                         last_ssim_score = result["ssim_score"]
+
                          diff_img = result["diff_image"]
-                         annotated, misplaced_count = detect_misplaced_objects(diff_img, annotated, min_area=5000)
+                         annotated, last_misplaced_count = detect_misplaced_objects(diff_img, annotated, min_area=5000)
+
+                     ssim_score = last_ssim_score
+                     misplaced_count = last_misplaced_count
      
                      # — Alerts
                      if detections:
                          labels = ", ".join(d["label"] for d in detections)
-                         alert = trigger_alert(f"Unwanted objects detected: {labels}", detections)
-                         st.session_state.alerts.insert(0, alert)
+                         push_alert_once(f"Unwanted objects detected: {labels}", detections=detections)
      
                      if crack_found:
-                         alert = trigger_alert(f"Possible structural cracks detected ({crack_count} regions)")
-                         st.session_state.alerts.insert(0, alert)
+                         push_alert_once(f"Possible structural cracks detected ({crack_count} regions)")
      
                      if ssim_score is not None and ssim_score < ssim_threshold:
-                         alert = trigger_alert(
+                         push_alert_once(
                              f"Scene changed — SSIM {ssim_score:.2%} (threshold {ssim_threshold:.0%})",
                              severity="MEDIUM",
                          )
-                         st.session_state.alerts.insert(0, alert)
                          
                      if misplaced_count > 0:
-                         alert = trigger_alert(
+                         push_alert_once(
                              f"MISPLACED OBJECT DETECTED ({misplaced_count} large regions)",
                              severity="HIGH",
                          )
-                         st.session_state.alerts.insert(0, alert)
      
                      # keep only last 50 alerts
                      st.session_state.alerts = st.session_state.alerts[:50]
@@ -281,6 +380,13 @@ with tab_camera:
                          f'<div class="value">{ssim_display}</div></div>',
                          unsafe_allow_html=True,
                      )
+                     elapsed = max(1e-6, time.perf_counter() - frame_start)
+                     fps_now = 1.0 / elapsed
+                     metric_fps.markdown(
+                         f'<div class="metric-card"><h3>Loop FPS</h3>'
+                         f'<div class="value">{fps_now:.1f}</div></div>',
+                         unsafe_allow_html=True,
+                     )
      
                      # — Render alerts
                      alert_html = ""
@@ -295,11 +401,17 @@ with tab_camera:
                      alert_placeholder.markdown(alert_html, unsafe_allow_html=True)
      
                      # — Capture baseline on button press
-                     if capture_bl:
+                     if st.session_state.capture_baseline_requested:
                          st.session_state.baseline = frame.copy()
                          save_baseline(frame)
+                         st.session_state.baseline_captured_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                         st.session_state.capture_baseline_requested = False
+                         status_placeholder.success("✅ Baseline captured successfully.")
      
-                     time.sleep(0.1)  # ~10 FPS
+                     target_interval = 1.0 / float(target_fps)
+                     wait_for = max(0.0, target_interval - (time.perf_counter() - frame_start))
+                     if wait_for > 0:
+                         time.sleep(wait_for)
      
                  cap.release()
                  status_placeholder.info("⏹️ Camera stopped.")
@@ -364,6 +476,8 @@ with tab_compare:
         if baseline_img is not None:
             st.image(cv2.cvtColor(baseline_img, cv2.COLOR_BGR2RGB),
                      caption="Baseline", use_container_width=True)
+            if st.session_state.baseline_captured_at and baseline_up is None:
+                st.caption(f"Using captured baseline from: {st.session_state.baseline_captured_at}")
         else:
             st.info("Upload or capture a baseline image first.")
 
