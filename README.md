@@ -1,28 +1,76 @@
-## Road Damage Detection and Classification using Deep Learning
-1. An application that helps in identifying different types of road damages by taking images as input.
-2. Detects two categories of damages: cracks and potholes (and ravels).
-3. Trained YOLO, Faster RCNN and SSD models for the purpose.
-4. Used streamlit to build a webapp that takes images as inputs and identifies damages in the images.
+# 🏗️ AI-Based Structural Damage & Gallery Monitoring System
 
-### Flowchart
-![image](https://github.com/AkashKhatrii/react-chat/assets/65164913/768122b7-726c-4b8a-9115-cb9228b4716c)
+An automated, real-time monitoring system designed to detect **structural damage** (cracks, pillar issues), **misplaced exhibits**, and **unwanted objects** (garbage, bags, etc.) in galleries or infrastructure environments.
 
-#### Data Collection and Labelling
-1. Used RDD2022 dataset which had images from 5 different countries. <a href="https://figshare.com/articles/dataset/RDD2022_-_The_multi-national_Road_Damage_Dataset_released_through_CRDDC_2022/21431547">Link</a>
-2. Not all images were used, manually selected images which were good from the dataset.
-3. Labelled the images in the format needed by all the models. eg. YOLO needs .txt files for the labels and FRCNN and SSD needs xml files.
+Built with **Python**, **Streamlit**, **OpenCV**, and **YOLOv8**.
 
-### Flowchart of Web App
-![image](https://github.com/AkashKhatrii/react-chat/assets/65164913/f3189f13-5b6d-44fc-9b07-2eb291faecac)
+---
 
-#### Graphical User Interface
-![image](https://github.com/AkashKhatrii/react-chat/assets/65164913/9c395c05-2a77-47bd-a065-dbe20a0ab438)
-![image](https://github.com/AkashKhatrii/react-chat/assets/65164913/f7ad49ad-de3b-44a3-a0f3-3107d2ffffc1)
-![image](https://github.com/AkashKhatrii/react-chat/assets/65164913/cfb2a906-9217-47a6-a53e-d8d1cf67a2b7)
+## 🚀 Key Features
 
-### Predictions
-![image](https://github.com/AkashKhatrii/react-chat/assets/65164913/3e6131c7-0989-4ee5-8f27-20fbecc14cb1)
+### 1. 🔍 Structural Damage Detection
+Detects wall cracks and surface anomalies using an advanced image processing pipeline:
+- **Multi-Method Heuristics:** Combines CLAHE (Contrast Enhancement), Canny Edge Detection, and Laplacian of Gaussian (Texture Disruption).
+- **Adjustable Sensitivity:** Low, Medium, and High sensitivity modes accessible via the sidebar to tune detection for different lighting and surfaces.
 
-![image](https://github.com/AkashKhatrii/react-chat/assets/65164913/7c1ea843-428e-48f0-a7f5-3fb7334121a7)
+### 2. 🔀 Misplaced Object Detection (SSIM)
+Detects shifted exhibits or newly introduced large items using **Structural Similarity Index (SSIM)**:
+- **Baseline Comparison:** Compares live frames against a saved "Normal" baseline image.
+- **Large Object Filtering:** Automatically ignores small noise or cables and focuses only on large misplaced objects (>5000px area).
+- **Bounding Boxes:** Highlights moved objects with red boxes and labels them as **"MISPLACED OBJECT"**.
 
+### 3. 🛡️ Unwanted Object Detection (YOLOv8)
+Integrates a pretrained **YOLOv8n** deep learning model to identify common unwanted items:
+- Detects bottles, bags, backpacks, phones, and other items that shouldn't be in the gallery space.
+- Real-time overlay of bounding boxes and confidence scores.
 
+### 4. 📷 Multi-Source Camera Support
+Flexibility in monitoring hardware:
+- **Laptop Webcam:** Standard hardware support (Index 0, 1, etc.).
+- **IP Webcam:** Connect your mobile phone or network camera via URL (e.g., `http://192.168.1.5:8080/video`).
+- **Start/Stop Controls:** Manually control when the monitoring starts to save resources.
+
+### 5. 📊 Interactive Streamlit Dashboard
+A premium-looking dark-themed UI that provides:
+- **Live Feed Tab:** Real-time video with all detection overlays.
+- **Results Metrics:** Instant counters for Objects, Cracks, and Similarity Scores.
+- **Alert Panel:** A persistent notification log for all detected anomalies.
+- **Before/After Analysis:** Side-by-side comparison of baseline vs. current frames with difference heatmaps.
+
+---
+
+## 🛠️ Installation & Setup
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/princepurviya/jklu.git
+   cd Road-Damage-Detection
+   ```
+
+2. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Run the application:**
+   ```bash
+   streamlit run app.py
+   ```
+
+---
+
+## 📖 How to Use
+
+1. **Set the Baseline:** Start the camera and click **"Capture as Baseline"** or upload a reference image of the exhibit in its perfect state.
+2. **Configure Sensitivity:** Use the sidebar sliders to adjust the YOLO confidence and crack detection sensitivity.
+3. **Monitor Alerts:** Keep an eye on the **Alerts** panel. If someone moves an exhibit or leaves a bag behind, the system will highlight the region and log the timestamp.
+4. **IP Webcam:** To use your phone as a camera, install an "IP Webcam" app, copy the URL provided by the app, and paste it into the **IP Webcam URL** field in the sidebar.
+
+---
+
+## 🔧 Technical Stack
+
+- **Frontend:** Streamlit (Custom CSS for Premium UI)
+- **Computer Vision:** OpenCV, Scikit-Image (SSIM)
+- **Deep Learning:** Ultralytics YOLOv8 (v8n)
+- **Languages:** Python 3.x
