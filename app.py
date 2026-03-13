@@ -84,6 +84,12 @@ st.markdown("""
         font-size: 0.9rem;
         margin-bottom: 0.6rem;
     }
+
+    /* hide streamlit branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stDeployButton {display:none;}
+    [data-testid="stToolbar"] {display:none;}
 </style>
 """, unsafe_allow_html=True)
 
