@@ -11,13 +11,13 @@ import streamlit as st
 from PIL import Image
 
 from detector import DamageDetector
-from comparator import compare_images
-from utils import trigger_alert, save_baseline, load_baseline
+from comparator import compare_images, detect_misplaced_objects
+from utils import trigger_alert, save_baseline, load_baseline, clear_baseline
 
 # ── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Structural Damage Detector",
-    page_icon="🏗️",
+    page_title="AI-Powered Exhibit Monitoring System",
+    page_icon="🖼️",
     layout="wide",
 )
 
@@ -90,7 +90,7 @@ st.markdown("""
 # ── Header ──────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="main-header">
-    <h1>🏗️ Structural Damage Detection System</h1>
+    <h1>🖼️ AI-Powered Exhibit Monitoring System</h1>
     <p>Real-time detection of wall cracks, pillar damage &amp; unwanted objects</p>
 </div>
 """, unsafe_allow_html=True)
@@ -153,6 +153,12 @@ with st.sidebar:
     if st.button("🗑️ Clear Alerts"):
         st.session_state.alerts = []
 
+    if st.button("❌ Remove Baseline"):
+        st.session_state.baseline = None
+        clear_baseline()
+        st.success("🗑️ Baseline removed!")
+        st.rerun()
+
 # ── Tabs ────────────────────────────────────────────────────────────────────
 tab_camera, tab_upload, tab_compare = st.tabs([
     "📹 Real-Time Camera", "📤 Upload Image", "🔍 Before / After Comparison"
@@ -210,9 +216,14 @@ with tab_camera:
      
                      # — Baseline comparison
                      ssim_score = None
+                     misplaced_count = 0
                      if st.session_state.baseline is not None:
                          result = compare_images(st.session_state.baseline, frame, ssim_threshold)
                          ssim_score = result["ssim_score"]
+                         
+                         # — Contour-based Misplaced Object Detection (>5000px)
+                         diff_img = result["diff_image"]
+                         annotated, misplaced_count = detect_misplaced_objects(diff_img, annotated, min_area=5000)
      
                      # — Alerts
                      if detections:
@@ -228,6 +239,13 @@ with tab_camera:
                          alert = trigger_alert(
                              f"Scene changed — SSIM {ssim_score:.2%} (threshold {ssim_threshold:.0%})",
                              severity="MEDIUM",
+                         )
+                         st.session_state.alerts.insert(0, alert)
+                         
+                     if misplaced_count > 0:
+                         alert = trigger_alert(
+                             f"MISPLACED OBJECT DETECTED ({misplaced_count} large regions)",
+                             severity="HIGH",
                          )
                          st.session_state.alerts.insert(0, alert)
      
@@ -385,9 +403,13 @@ with tab_compare:
 
         # also run YOLO on current image
         st.markdown("---")
-        st.subheader("YOLO Detection on Current Image")
+        st.subheader("YOLO & Misplacement Detection on Current Image")
         annotated, detections = detector.detect_objects(current_img)
         annotated, crack_found, crack_count = detector.detect_cracks(annotated, sensitivity=crack_sensitivity)
+        
+        # — Misplaced Object Detection
+        annotated, misplaced_count = detect_misplaced_objects(result["diff_image"], annotated, min_area=5000)
+
         st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
                  caption="Detection Overlay", use_container_width=True)
 
@@ -396,5 +418,8 @@ with tab_compare:
                 st.write(f"- **{d['label']}** — {d['confidence']:.0%}")
         if crack_found:
             st.write(f"- **Cracks:** {crack_count} region(s)")
-        if not detections and not crack_found:
-            st.success("No anomalies detected in current image.")
+        if misplaced_count > 0:
+            st.error(f"🚨 **Misplaced Objects:** {misplaced_count} large region(s) detected via SSIM (>5000px)")
+            
+        if not detections and not crack_found and misplaced_count == 0:
+            st.success("✅ No anomalies or misplaced objects detected in current image.")

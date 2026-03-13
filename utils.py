@@ -41,6 +41,13 @@ def load_baseline(name: str = "baseline.png") -> np.ndarray | None:
     return cv2.imread(path)
 
 
+def clear_baseline(name: str = "baseline.png"):
+    """Delete the saved baseline image from disk."""
+    path = os.path.join(BASELINE_DIR, name)
+    if os.path.exists(path):
+        os.remove(path)
+
+
 # ── Drawing ─────────────────────────────────────────────────────────────────
 
 def draw_detections(frame: np.ndarray, detections: list,
