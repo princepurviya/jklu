@@ -17,7 +17,7 @@ from utils import trigger_alert, save_baseline, load_baseline, clear_baseline
 # ── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="AI-Powered Exhibit Monitoring System",
-    page_icon="🖼️",
+    page_icon=None,
     layout="wide",
 )
 
@@ -90,7 +90,7 @@ st.markdown("""
 # ── Header ──────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="main-header">
-    <h1>🖼️ AI-Powered Exhibit Monitoring System</h1>
+    <h1>AI-Powered Exhibit Monitoring System</h1>
     <p>Real-time detection of wall cracks, pillar damage &amp; unwanted objects</p>
 </div>
 """, unsafe_allow_html=True)

@@ -1,4 +1,4 @@
-# 🖼️ AI-Powered Exhibit Monitoring System
+# AI-Powered Exhibit Monitoring System
 
 An automated, real-time monitoring system designed to detect **structural damage** (cracks, pillar issues), **misplaced exhibits**, and **unwanted objects** (garbage, bags, etc.) in galleries or infrastructure environments.
 
