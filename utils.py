@@ -42,10 +42,28 @@ def load_baseline(name: str = "baseline.png") -> np.ndarray | None:
 
 
 def clear_baseline(name: str = "baseline.png"):
-    """Delete the saved baseline image from disk."""
+    """Delete the saved baseline image and its edge mask from disk."""
     path = os.path.join(BASELINE_DIR, name)
     if os.path.exists(path):
         os.remove(path)
+    edges_path = os.path.join(BASELINE_DIR, "baseline_edges.png")
+    if os.path.exists(edges_path):
+        os.remove(edges_path)
+
+
+def save_baseline_edges(edges: np.ndarray, name: str = "baseline_edges.png") -> str:
+    """Save baseline edge mask to disk. Returns saved path."""
+    path = os.path.join(BASELINE_DIR, name)
+    cv2.imwrite(path, edges)
+    return path
+
+
+def load_baseline_edges(name: str = "baseline_edges.png") -> np.ndarray | None:
+    """Load a previously saved baseline edge mask. Returns None if missing."""
+    path = os.path.join(BASELINE_DIR, name)
+    if not os.path.exists(path):
+        return None
+    return cv2.imread(path, cv2.IMREAD_GRAYSCALE)
 
 
 # ── Drawing ─────────────────────────────────────────────────────────────────

@@ -1,76 +1,183 @@
 # AI-Powered Exhibit Monitoring System
 
-An automated, real-time monitoring system designed to detect **structural damage** (cracks, pillar issues), **misplaced exhibits**, and **unwanted objects** (garbage, bags, etc.) in galleries or infrastructure environments.
+Real-time monitoring platform for galleries/museums to detect:
+- structural damage (cracks / scene changes),
+- misplaced exhibits (object position shift),
+- foreign or unwanted objects.
 
-Built with **Python**, **Streamlit**, **OpenCV**, and **YOLOv8**.
-
----
-
-## 🚀 Key Features
-
-### 1. 🔍 Structural Damage Detection
-Detects wall cracks and surface anomalies using an advanced image processing pipeline:
-- **Multi-Method Heuristics:** Combines CLAHE (Contrast Enhancement), Canny Edge Detection, and Laplacian of Gaussian (Texture Disruption).
-- **Adjustable Sensitivity:** Low, Medium, and High sensitivity modes accessible via the sidebar to tune detection for different lighting and surfaces.
-
-### 2. 🔀 Misplaced Object Detection (SSIM)
-Detects shifted exhibits or newly introduced large items using **Structural Similarity Index (SSIM)**:
-- **Baseline Comparison:** Compares live frames against a saved "Normal" baseline image.
-- **Large Object Filtering:** Automatically ignores small noise or cables and focuses only on large misplaced objects (>5000px area).
-- **Bounding Boxes:** Highlights moved objects with red boxes and labels them as **"MISPLACED OBJECT"**.
-
-### 3. 🛡️ Unwanted Object Detection (YOLOv8)
-Integrates a pretrained **YOLOv8n** deep learning model to identify common unwanted items:
-- Detects bottles, bags, backpacks, phones, and other items that shouldn't be in the gallery space.
-- Real-time overlay of bounding boxes and confidence scores.
-
-### 4. 📷 Multi-Source Camera Support
-Flexibility in monitoring hardware:
-- **Laptop Webcam:** Standard hardware support (Index 0, 1, etc.).
-- **IP Webcam:** Connect your mobile phone or network camera via URL (e.g., `http://192.168.1.5:8080/video`).
-- **Start/Stop Controls:** Manually control when the monitoring starts to save resources.
-
-### 5. 📊 Interactive Streamlit Dashboard
-A premium-looking dark-themed UI that provides:
-- **Live Feed Tab:** Real-time video with all detection overlays.
-- **Results Metrics:** Instant counters for Objects, Cracks, and Similarity Scores.
-- **Alert Panel:** A persistent notification log for all detected anomalies.
-- **Before/After Analysis:** Side-by-side comparison of baseline vs. current frames with difference heatmaps.
+This repository contains a **full-stack setup**:
+- React + Vite frontend (`frontend/`)
+- Node.js + Express backend (`backend/`)
+- Streamlit + OpenCV + YOLO dashboard (`app.py`)
 
 ---
 
-## 🛠️ Installation & Setup
+## System Architecture
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/princepurviya/jklu.git
-   cd Road-Damage-Detection
-   ```
+Frontend (React)
+→ Backend API (Express)
+→ AI Dashboard (Streamlit)
+→ Camera feeds + CV pipeline
 
-2. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Run the application:**
-   ```bash
-   streamlit run app.py
-   ```
+Detection flow in dashboard:
+1. Preprocess frames (grayscale + Gaussian blur) for robust comparison.
+2. Damage branch: abs-diff/SSIM style scene change + contour area filtering.
+3. Object branch: YOLO detections for moved/foreign/unwanted objects.
+4. Alert engine logs timestamped events.
 
 ---
 
-## 📖 How to Use
+## Key Features
 
-1. **Set the Baseline:** Start the camera and click **"Capture as Baseline"** or upload a reference image of the exhibit in its perfect state.
-2. **Configure Sensitivity:** Use the sidebar sliders to adjust the YOLO confidence and crack detection sensitivity.
-3. **Monitor Alerts:** Keep an eye on the **Alerts** panel. If someone moves an exhibit or leaves a bag behind, the system will highlight the region and log the timestamp.
-4. **IP Webcam:** To use your phone as a camera, install an "IP Webcam" app, copy the URL provided by the app, and paste it into the **IP Webcam URL** field in the sidebar.
+- **Damage Detection**
+   - Noise-robust preprocessing.
+   - Threshold + contour-area filtering to suppress false alerts.
+- **Misplacement Detection**
+   - Position-based object shift from baseline detections.
+- **Foreign/Unwanted Object Detection**
+   - YOLOv8n-based object detection with filtered alert classes.
+- **Baseline Workflow**
+   - Baseline captured using `frame.copy()`.
+   - Frame-stabilization skip after baseline capture.
+- **Camera Support**
+   - Laptop webcam and IP webcam URLs.
+- **Multi-Camera Control (dashboard sidebar)**
+   - Add/manage camera sources and run feeds.
 
 ---
 
-## 🔧 Technical Stack
+## Project Structure
 
-- **Frontend:** Streamlit (Custom CSS for Premium UI)
-- **Computer Vision:** OpenCV, Scikit-Image (SSIM)
-- **Deep Learning:** Ultralytics YOLOv8 (v8n)
-- **Languages:** Python 3.x
+```text
+jklu/
+├── app.py                  # Streamlit AI dashboard
+├── detector.py             # YOLO + crack/object utilities
+├── comparator.py           # frame comparison + contour filtering
+├── utils.py
+├── backend/                # Express API
+│   ├── server.js
+│   └── routes/
+│       ├── health.js
+│       ├── system.js
+│       └── contact.js
+└── frontend/               # React + Vite UI
+```
+
+---
+
+## Prerequisites
+
+- Python 3.10+
+- Node.js 18+
+- MongoDB running locally (default backend config)
+
+---
+
+## Setup
+
+### 1) Python dependencies (dashboard)
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2) Backend dependencies
+
+```bash
+cd backend
+npm install
+cd ..
+```
+
+### 3) Frontend dependencies
+
+```bash
+cd frontend
+npm install
+cd ..
+```
+
+---
+
+## Run (3 terminals)
+
+### Terminal A — Backend
+
+```bash
+cd backend
+npm run dev
+```
+
+Backend runs on: `http://localhost:5000`
+
+### Terminal B — Frontend
+
+```bash
+cd frontend
+npx vite --host 0.0.0.0 --port 5173
+```
+
+Frontend runs on: `http://localhost:5173`
+
+### Terminal C — Streamlit Dashboard
+
+```bash
+python -m streamlit run app.py --server.headless true --server.port 8501
+```
+
+Dashboard runs on: `http://localhost:8501`
+
+---
+
+## API Endpoints (Backend)
+
+- `GET /api/health`
+- `GET /api/health/db`
+- `POST /api/contact`
+- `POST /api/system/start` (starts Streamlit process and returns `dashboardUrl`)
+
+---
+
+## How to Use
+
+1. Start all services.
+2. Open frontend: `http://localhost:5173`.
+3. Click **Start System** (opens dashboard in same tab).
+4. In dashboard sidebar:
+    - select/add camera,
+    - capture baseline,
+    - configure thresholds,
+    - start monitoring.
+
+---
+
+## Recommended Default Tuning
+
+- Gaussian blur: `21x21`
+- Diff threshold: `40`
+- Min changed area: `2000` (adjust per scene)
+- Movement threshold: `~50 px`
+- Skip frames after baseline capture: `5`
+
+---
+
+## Troubleshooting
+
+- **Sidebar/settings panel not visible**
+   - Make sure Streamlit toolbar/header is not hidden by custom CSS.
+   - Hard refresh browser (`Ctrl + F5`).
+- **Port already in use**
+   - Free ports `5000`, `5173`, `8501` or run on alternate ports.
+- **Frontend loads but API fails**
+   - Check backend is running and `GET /api/health` returns success.
+- **Frequent false alerts**
+   - Increase min contour area / movement threshold.
+   - Re-capture baseline with stable camera.
+
+---
+
+## Tech Stack
+
+- **Frontend:** React, Vite, Framer Motion
+- **Backend:** Node.js, Express, MongoDB (Mongoose)
+- **AI/CV:** Python, Streamlit, OpenCV, Ultralytics YOLOv8, NumPy, scikit-image

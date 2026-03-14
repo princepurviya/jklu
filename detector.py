@@ -46,37 +46,109 @@ class DamageDetector:
             annotated : copy of frame with bounding boxes
             detections: list[dict] with label / confidence / bbox
         """
-        results = self.model(frame, conf=self.confidence, verbose=False)
-        annotated = frame.copy()
+        scene_detections = self.detect_scene_objects(frame)
+        detections = [d for d in scene_detections if d["label"] in UNWANTED_CLASSES]
+        annotated = self.draw_object_detections(frame, detections)
+        return annotated, detections
+
+    def detect_scene_objects(self, frame: np.ndarray, min_confidence: float | None = None):
+        """Detect all YOLO objects with centroid metadata for tracking."""
+        conf_threshold = self.confidence if min_confidence is None else min_confidence
+        results = self.model(frame, conf=conf_threshold, verbose=False)
         detections = []
 
         for result in results:
             for box in result.boxes:
                 cls_id = int(box.cls[0])
                 label = self.model.names[cls_id]
-                conf  = float(box.conf[0])
-
-                if label not in UNWANTED_CLASSES:
-                    continue
-
+                conf = float(box.conf[0])
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
+                cx = int((x1 + x2) / 2)
+                cy = int((y1 + y2) / 2)
                 detections.append({
                     "label": label,
                     "confidence": round(conf, 2),
                     "bbox": (x1, y1, x2, y2),
+                    "center": (cx, cy),
                 })
 
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), BOX_COLOR, 2)
-                tag = f"{label} {conf:.0%}"
-                (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
-                cv2.rectangle(annotated, (x1, y1 - th - 8), (x1 + tw + 4, y1), TEXT_BG, -1)
-                cv2.putText(annotated, tag, (x1 + 2, y1 - 4),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        return detections
 
-        return annotated, detections
+    @staticmethod
+    def draw_object_detections(frame: np.ndarray, detections: list[dict], color=BOX_COLOR):
+        """Draw provided detections with labels."""
+        annotated = frame.copy()
+        for det in detections:
+            x1, y1, x2, y2 = det["bbox"]
+            conf = det["confidence"]
+            label = det["label"]
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+            tag = f"{label} {conf:.0%}"
+            (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+            cv2.rectangle(annotated, (x1, y1 - th - 8), (x1 + tw + 4, y1), TEXT_BG, -1)
+            cv2.putText(annotated, tag, (x1 + 2, y1 - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        return annotated
 
     # ════════════════════════════════════════════════════════════════════════
-    # 2.  Crack / structural-damage detection  (multi-method)
+    # 2.  Edge mask computation (reusable for baseline masking)
+    # ════════════════════════════════════════════════════════════════════════
+    @staticmethod
+    def compute_edge_mask(
+        frame: np.ndarray,
+        sensitivity: str = "medium",
+        edge_low: int | None = None,
+        edge_high: int | None = None,
+    ) -> np.ndarray:
+        """
+        Compute the combined triple-method edge mask for a frame.
+        Returns a single-channel uint8 binary mask.
+        This is used both for baseline capture and real-time detection.
+        """
+        presets = {
+            "low":    {"edge_low": 60, "edge_high": 180},
+            "medium": {"edge_low": 30, "edge_high": 120},
+            "high":   {"edge_low": 15, "edge_high": 80},
+        }
+        p = presets.get(sensitivity, presets["medium"])
+        edge_low   = edge_low   or p["edge_low"]
+        edge_high  = edge_high  or p["edge_high"]
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # Method A: CLAHE + Canny
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        blurred_a = cv2.GaussianBlur(enhanced, (5, 5), 0)
+        edges_a = cv2.Canny(blurred_a, edge_low, edge_high)
+
+        # Method B: Adaptive threshold (dark lines)
+        blurred_b = cv2.GaussianBlur(gray, (11, 11), 0)
+        thresh_b = cv2.adaptiveThreshold(
+            blurred_b, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            blockSize=15, C=8,
+        )
+
+        # Method C: Laplacian of Gaussian (texture disruption)
+        log = cv2.Laplacian(cv2.GaussianBlur(gray, (3, 3), 0), cv2.CV_64F)
+        log_abs = np.uint8(np.clip(np.abs(log), 0, 255))
+        _, edges_c = cv2.threshold(log_abs, 30, 255, cv2.THRESH_BINARY)
+
+        # Combine all three masks
+        combined = cv2.bitwise_or(edges_a, thresh_b)
+        combined = cv2.bitwise_or(combined, edges_c)
+
+        # Morphology: close small gaps, then thin
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        combined = cv2.dilate(combined, kernel, iterations=2)
+        combined = cv2.erode(combined, kernel, iterations=1)
+
+        return combined
+
+    # ════════════════════════════════════════════════════════════════════════
+    # 3.  Crack / structural-damage detection  (multi-method + baseline mask)
     # ════════════════════════════════════════════════════════════════════════
     @staticmethod
     def detect_cracks(
@@ -86,9 +158,13 @@ class DamageDetector:
         edge_high: int | None = None,
         min_area: int | None = None,
         min_aspect: float | None = None,
+        baseline_edges: np.ndarray | None = None,
     ):
         """
-        Multi-method crack detection.
+        Multi-method crack detection with optional baseline masking.
+
+        If baseline_edges is provided, those edges are subtracted from the
+        current frame's edge mask so that only NEW cracks are detected.
 
         Returns:
             overlay     : frame with crack contours highlighted
@@ -107,36 +183,27 @@ class DamageDetector:
         min_area   = min_area   or p["min_area"]
         min_aspect = min_aspect or p["min_aspect"]
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        # ── Method A: CLAHE + Canny ────────────────────────────────────────
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray)
-        blurred_a = cv2.GaussianBlur(enhanced, (5, 5), 0)
-        edges_a = cv2.Canny(blurred_a, edge_low, edge_high)
-
-        # ── Method B: Adaptive threshold (dark lines) ──────────────────────
-        blurred_b = cv2.GaussianBlur(gray, (11, 11), 0)
-        thresh_b = cv2.adaptiveThreshold(
-            blurred_b, 255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV,
-            blockSize=15, C=8,
+        # ── Compute current edge mask ──────────────────────────────────────
+        combined = DamageDetector.compute_edge_mask(
+            frame, sensitivity=sensitivity, edge_low=edge_low, edge_high=edge_high,
         )
 
-        # ── Method C: Laplacian of Gaussian (texture disruption) ───────────
-        log = cv2.Laplacian(cv2.GaussianBlur(gray, (3, 3), 0), cv2.CV_64F)
-        log_abs = np.uint8(np.clip(np.abs(log), 0, 255))
-        _, edges_c = cv2.threshold(log_abs, 30, 255, cv2.THRESH_BINARY)
+        # ── Baseline subtraction: remove pre-existing cracks ───────────────
+        if baseline_edges is not None:
+            # Resize baseline edges to match current frame if needed
+            h, w = combined.shape[:2]
+            bh, bw = baseline_edges.shape[:2]
+            if (bh, bw) != (h, w):
+                baseline_resized = cv2.resize(baseline_edges, (w, h))
+            else:
+                baseline_resized = baseline_edges
 
-        # ── Combine all three masks ────────────────────────────────────────
-        combined = cv2.bitwise_or(edges_a, thresh_b)
-        combined = cv2.bitwise_or(combined, edges_c)
+            # Dilate baseline edges slightly to account for minor shifts
+            dilate_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+            baseline_dilated = cv2.dilate(baseline_resized, dilate_kernel, iterations=1)
 
-        # morphology: close small gaps, then thin
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        combined = cv2.dilate(combined, kernel, iterations=2)
-        combined = cv2.erode(combined, kernel, iterations=1)
+            # Subtract: only edges NOT in baseline survive
+            combined = cv2.subtract(combined, baseline_dilated)
 
         # ── Extract and filter contours ────────────────────────────────────
         contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL,
@@ -154,7 +221,6 @@ class DamageDetector:
             aspect = max(w, h) / (min(w, h) + 1e-5)
 
             # accept if elongated OR if arc-length is large relative to area
-            # (cracks have long perimeters relative to their filled area)
             perimeter = cv2.arcLength(cnt, True)
             compactness = (perimeter * perimeter) / (area + 1e-5)
 
@@ -162,10 +228,9 @@ class DamageDetector:
             is_crack_like = compactness > 50   # long thin shape
 
             if is_elongated or is_crack_like:
-                # colour by method — yellow contour + magenta bounding rect
                 cv2.drawContours(overlay, [cnt], -1, CRACK_COLOR, 2)
                 cv2.rectangle(overlay, (x, y), (x + w, y + h), HIGHLIGHT_COLOR, 1)
-                label = f"crack {area:.0f}px"
+                label = f"NEW crack {area:.0f}px"
                 cv2.putText(overlay, label, (x, y - 4),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, CRACK_COLOR, 1)
                 crack_count += 1
